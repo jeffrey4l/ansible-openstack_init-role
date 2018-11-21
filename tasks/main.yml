@@ -6,24 +6,18 @@
     vcpus: "{{ item.vcpu }}"
     disk: "{{ item.disk }}"
   with_items: "{{ nova_flavors }}"
-  tags:
-    - flavor
 
 - name: ensure image download folder
   file:
     path: "{{ image_download_folder }}"
     state: directory
     recurse: true
-  tags:
-    - image
 
 - name: check local images
   stat:
     path: "{{ image_download_folder }}/{{ item.download_url | basename }}"
   register: check_local_images
   with_items: "{{ images }}"
-  tags:
-    - image
 
 - name: download the images
   get_url:
@@ -32,21 +26,34 @@
   when:
     - not item.stat.exists
   with_items: "{{ check_local_images.results }}"
-  tags:
-    - image
+
+- name: get the image format
+  command: "qemu-img info {{ image_download_folder }}/{{ item.item.download_url | basename }}"
+  register: image_info
+  when:
+    - item.item.image_target_format != 'default'
+  with_items: "{{ check_local_images.results }}"
+
+- name: convert image format
+  command: >-
+    qemu-img convert -O {{ item.item.item.image_target_format }}
+    {{ image_download_folder }}/{{ item.item.item.download_url | basename }}
+    {{ image_download_folder }}/{{ item.item.item.download_url | basename }}.{{ item.item.item.image_target_format }}
+  when:
+    - item.item.image_target_format != (item.stdout|from_yaml)['file format']
+  with_items: "{{ image_info.results }}"
 
 - name: upload glance image
   os_image:
     name: "{{ item.name }}"
     container_format: "{{ item.container_format | default('bare') }}"
-    disk_format: "{{ item.disk_format | default('qcow2') }}"
-    filename: "{{ image_download_folder }}/{{ item.download_url | basename }}"
+    disk_format: "{{ item.image_target_format | default('qcow2') }}"
+    filename: "{{ image_download_folder }}/{{ item.download_url | basename }}{{ '.' ~ item.image_target_format if item.image_target_format != 'default' else ''}}"
     is_public: true
     properties:
       hw_scsi_model: "{{ 'virtio-scsi' if item.enable_discard else omit }}"
       hw_disk_bus: "{{ 'scsi' if item.enable_discard else omit }}"
+      hw_qemu_guest_agent: "{{ 'yes' if item.enable_qemu_guest_agent else omit }}"
   with_items: "{{ images }}"
-  tags:
-    - image
 
 # vim:ft=yaml
