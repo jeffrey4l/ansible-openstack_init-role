@@ -1,0 +1,161 @@
+---
+- hosts: all
+  vars:
+    image_url: http://download.cirros-cloud.net/0.3.5/
+    image: cirros-0.3.5-{{ ansible_architecture }}-disk.img
+    image_name: cirros
+    image_type: linux
+    image_local_path: "/opt/cache/files"
+
+    # This ext_net_cidr is your public network,that you want to connect to the internet via.
+    ext_net_cidr: 10.0.2.0/24
+    ext_net_range_start: 10.0.2.150
+    ext_net_range_end: 10.0.2.199
+    ext_net_gateway: 10.0.2.1
+    security_group_ruls:
+      - {protocol: icmp, port_range_min: -1, port_range_max: -1}
+      - {protocol: tcp, port_range_min: 22, port_range_max: 22}
+      # Open heat-cfn so it can run on a different host
+      - {protocol: tcp, port_range_min: 8000, port_range_max: 8000}
+      - {protocol: tcp, port_range_min: 8080, port_range_max: 8080}
+    flavors:
+      - {name: m1.tiny, id: 1, ram: 512, disk: 1, vcpus: 1}
+      - {name: m1.small, id: 2, ram: 2048, disk: 20, vcpus: 1}
+      - {name: m1.medium, id: 3, ram: 4096, disk: 40, vcpus: 2}
+      - {name: m1.large, id: 4, ram: 8192, disk: 80, vcpus: 4}
+      - {name: m1.xlarge, id: 5, ram: 15384, disk: 160, vcpus: 8}
+  tasks:
+    - name: Checking image folder path
+      stat:
+        path: "{{ image_local_path }}"
+      register: check_image_path
+
+    - name: Use local folder for image path
+      set_fact:
+        image_path: "{{ playbook_dir }}/../"
+      when:
+        - not check_image_path.stat.exists
+
+    - name: Checking local image exists
+      stat:
+        path: "{{ image_path }}/{{ image }}"
+      register: check_local_image
+
+    - name: Downloading the image
+      get_url:
+        url: "{{ image_url }}/{{ image }}"
+        dest: "{{ image_path }}"
+      when: not check_local_image.stat.exists
+
+    - name: Creating image on openstack
+      os_image:
+        name: "{{ image_name }}"
+        container_format: bare
+        disk_format: qcow2
+        filename: "{{ image_local_path }}"
+        is_public: true
+        properties:
+          os_type: "{{ image_type }}"
+          hw_firmware_type: "{{ 'uefi' if ansible_architecture=='aarch64' else omit }}"
+
+    - name: Creating neutron public1 network
+      os_network:
+        name: public1
+        external: true
+        provider_physical_network: physnet1
+        provider_network_type: flat
+
+    - name: Creating neutron subnet for public1
+      os_subnet:
+        name: public1-subnet
+        network_name: public1
+        cidr: "{{ ext_net_cidr }}"
+        allocation_pool_start: "{{ ext_net_range_start }}"
+        allocation_pool_end: "{{ ext_net_range_end }}"
+        enable_dhcp: false
+        gateway_ip: "{{ ext_net_gateway }}"
+
+    - name: Creating neutron demo-net network
+      os_network:
+        name: demo-net
+        provider_network_type: vxlan
+      register: demo_net
+
+    - name: Creating neutron demo-subnet for demo-net
+      os_subnet:
+        name: demo-subnet
+        network_name: demo-net
+        cidr: 10.0.0.0/24
+        gateway_ip: 10.0.0.1
+        dns_nameservers:
+          - 8.8.8.8
+
+    - name: Creating neutron demo-router
+      os_router:
+        name: demo-router
+        network: public1
+        interfaces:
+          - demo-subnet
+
+    - name: Get admin project default security group
+      command: openstack security group list --format json --project admin
+      register: admin_secgroups
+      changed_when: false
+
+    - name: Creating security group rule for admin default security group
+      vars:
+        admin_default_secgroup: "{{ admin_secgroups.stdout | from_json | selectattr('Name', 'equalto', 'default') | first }}"
+      os_security_group_rule:
+        security_group: "{{ admin_default_secgroup.ID }}"
+        protocol: "{{ item.protocol }}"
+        port_range_min: "{{ item.port_range_min }}"
+        port_range_max: "{{ item.port_range_max }}"
+        remote_ip_prefix: 0.0.0.0/0
+      with_items: "{{ security_group_ruls }}"
+
+    - name: Checking whether ssh public key
+      stat:
+        path: "{{ ansible_env.HOME }}/.ssh/id_rsa.pub"
+      register: ssh_key
+
+    - name: Creating keypair
+      os_keypair:
+        name: mykey
+        public_key_file: "{{ ssh_key.stat.path }}"
+      when: ssh_key.stat.exists
+
+    # NOTE(jeffrey4l)
+    # ansible os_quota has bug when cinder is not enable[0]
+    # ansible > 2.4 fixed this issue. use a workaround
+    # [0] https://github.com/ansible/ansible/issues/23085
+    - name: Getting quota
+      command: openstack quota list --compute --format json
+      register: admin_quotas
+      changed_when: false
+
+    - name: Setting quota
+      command: >
+        openstack quota set --instances 40
+        --cores 40 --ram 96000 admin
+      when:
+        - admin_quotas.stdout | bool
+        - admin_quotas.0.Ram | default(0) != 96000
+          or admin_quota.0.Instances | default(0) != 40
+          or admin_quota.0.Cores | default(0) != 40
+
+    - name: Creating flavors
+      os_nova_flavor:
+        flavorid: "{{ item.id }}"
+        name: "{{ item.name }}"
+        ram: "{{ item.ram }}"
+        disk: "{{ item.disk }}"
+        vcpus: "{{ item.disk }}"
+      with_items: "{{ flavors }}"
+
+    - name: Pring deploy string
+      vars:
+        help_msg: |
+          To deploy a demo instance, run:
+            openstack server create --image {{ image_name }} --flavor m1.tiny --key-name mykey --network demo-net demo1
+      debug:
+        msg: "{{ help_msg.split('\n') }}"
