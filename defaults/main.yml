@@ -22,28 +22,28 @@ image_enable_qemu_guest_agent: true
 cirros:
   name: cirros
   download_url: http://download.cirros-cloud.net/0.4.0/cirros-0.4.0-x86_64-disk.img
-  enable_discard: "{{ enable_discard }}"
+  enable_discard: "{{ image_enable_discard }}"
   image_enable_qemu_guest_agent: "{{ image_enable_qemu_guest_agent }}"
   image_target_format: "{{ image_target_format }}"
 
 ubuntu1604:
   name: ubuntu1604
   download_url: http://cloud-images.ubuntu.com/releases/16.04/release/ubuntu-16.04-server-cloudimg-amd64-disk1.img
-  enable_discard: "{{ enable_discard }}"
+  enable_discard: "{{ image_enable_discard }}"
   image_enable_qemu_guest_agent: "{{ image_enable_qemu_guest_agent }}"
   image_target_format: "{{ image_target_format }}"
 
 ubuntu1804:
   name: ubuntu1804
   download_url: http://cloud-images.ubuntu.com/releases/18.04/release/ubuntu-18.04-server-cloudimg-amd64.img
-  enable_discard: "{{ enable_discard }}"
+  enable_discard: "{{ image_enable_discard }}"
   image_enable_qemu_guest_agent: "{{ image_enable_qemu_guest_agent }}"
   image_target_format: "{{ image_target_format }}"
 
 centos75:
   name: centos7_1805
   download_url: https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-1805.qcow2
-  enable_discard: "{{ enable_discard }}"
+  enable_discard: "{{ image_enable_discard }}"
   image_enable_qemu_guest_agent: "{{ image_enable_qemu_guest_agent }}"
   image_target_format: "{{ image_target_format }}"
 
